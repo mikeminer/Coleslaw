@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Outlaw Coleslaw 🥬</title>
+<style>
+  :root{
+    --black:#0B0B0B; --card:#161616; --base:#0052FF; --slaw:#39FF14; --text:#E5FFEF; --muted:#9fb7a4;
+  }
+  html,body{background:var(--black); color:var(--text); font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif; margin:0;}
+  .wrap{max-width:880px; margin:28px auto; padding:0 16px;}
+  h1{font-size:42px; margin:0 0 6px;}
+  h3{margin:8px 0 12px;}
+  .tag{color:var(--slaw); font-weight:700}
+  .card{background:var(--card); border:1px solid #222; border-radius:12px; padding:16px; margin:14px 0;}
+  input,button{padding:12px; font-size:16px; border-radius:10px; border:1px solid #2a2a2a; background:#0e0e0e; color:var(--text);}
+  input{width:100%; box-sizing:border-box; margin:6px 0 12px;}
+  button{cursor:pointer; background:linear-gradient(90deg, var(--base), #1a7cff); border:none;}
+  button.slaw{background:linear-gradient(90deg, var(--slaw), #7bff6c); color:#041a04;}
+  small, .muted{color:var(--muted)}
+  .row{display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:end;}
+  .logo{display:flex; align-items:center; gap:10px; margin-bottom:10px;}
+  .logo .dot{width:14px; height:14px; background:var(--slaw); border-radius:50%; box-shadow:0 0 12px var(--slaw);}
+  .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+  .pill{display:inline-block; font-size:12px; padding:4px 8px; border:1px solid #2a2a2a; border-radius:999px; margin-right:8px;}
+  .grid{display:grid; grid-template-columns: repeat(auto-fill,minmax(260px,1fr)); gap:10px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="logo"><div class="dot"></div><div>
+    <h1>Outlaw Coleslaw</h1>
+    <div class="muted">The permissionless front page of <span class="tag">Base</span>. Prove your dapp matters.</div>
+  </div></div>
+
+  <div class="card">
+    <button id="connect">Connect Wallet</button>
+    <button id="switch" style="margin-left:8px;">Switch to Base</button>
+    <div id="who" class="mono" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="card">
+    <h3>Mint a 🥬 Slaw Stamp</h3>
+    <label>Colony ID (use lowercase, e.g. <span class="mono">uniswap</span>, <span class="mono">friendtech</span>)</label>
+    <input id="colony" placeholder="colony id"/>
+    <label>Evidence URI (ipfs://, https://, or short note)</label>
+    <input id="uri" placeholder="ipfs://..., https://..., or short note"/>
+    <label>Pay Amount (ETH) — goes to Slaw Foundation</label>
+    <div class="row">
+      <input id="eth" type="number" step="0.0001" min="0.0001" value="0.0001"/>
+      <button id="mint" class="slaw">Mint Slaw</button>
+    </div>
+    <div id="mintStatus" class="mono muted"></div>
+  </div>
+
+  <div class="card">
+    <h3>🥗 Salad Bar — Leaderboard (Top 20 by ETH)</h3>
+    <button id="loadTop">Load Leaderboard</button>
+    <div id="topOut" style="margin-top:12px;"></div>
+  </div>
+
+  <div class="card">
+    <h3>Your Slaw Stamps</h3>
+    <button id="loadMine">Load My Stamps</button>
+    <div id="mine" style="margin-top:12px;"></div>
+  </div>
+
+  <div class="muted" style="margin-top:18px">
+    <span class="pill">Contract: <span id="addr" class="mono"></span></span>
+    <span class="pill">Foundation: <span id="found" class="mono"></span></span>
+    <span class="pill">Min per mint: <span id="min" class="mono"></span> wei</span>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.min.js"></script>
+<script>
+/** ======== CONFIG ======== **/
+const CONTRACT_ADDRESS = "0xYourContractOnBase";   // <-- paste after deploy
+const TARGET_CHAIN_ID  = 8453; // Base mainnet: 8453, Base Sepolia: 84532
+
+// ABI only for the functions we use
+const ABI = [
+  {"inputs":[{"internalType":"address","name":"_foundation","type":"address"},{"internalType":"uint256","name":"_minBurnWei","type":"uint256"}],"stateMutability":"nonpayable","type":"constructor"},
+  {"anonymous":false,"inputs":[{"indexed":true,"internalType":"bytes32","name":"colonyId","type":"bytes32"},{"indexed":false,"internalType":"string","name":"label","type":"string"}],"name":"ColonyRegistered","type":"event"},
+  {"anonymous":false,"inputs":[{"indexed":false,"internalType":"address","name":"oldAddr","type":"address"},{"indexed":false,"internalType":"address","name":"newAddr","type":"address"}],"name":"FoundationUpdated","type":"event"},
+  {"anonymous":false,"inputs":[{"indexed":false,"internalType":"address","name":"oldOwner","type":"address"},{"indexed":false,"internalType":"address","name":"newOwner","type":"address"}],"name":"OwnershipTransferred","type":"event"},
+  {"anonymous":false,"inputs":[{"indexed":true,"internalType":"uint256","name":"tokenId","type":"uint256"},{"indexed":true,"internalType":"address","name":"user","type":"address"},{"indexed":true,"internalType":"bytes32","name":"colonyId","type":"bytes32"},{"indexed":false,"internalType":"string","name":"colonyRaw","type":"string"},{"indexed":false,"internalType":"string","name":"uri","type":"string"},{"indexed":false,"internalType":"uint256","name":"paidWei","type":"uint256"}],"name":"SlawMinted","type":"event"},
+  {"inputs":[],"name":"foundation","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"minBurnWei","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"name","outputs":[{"internalType":"string","name":"","type":"string"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"symbol","outputs":[{"internalType":"string","name":"","type":"string"}],"stateMutability":"view","type":"function"},
+  {"inputs":[{"internalType":"address","name":"user","type":"address"}],"name":"stampsOf","outputs":[{"internalType":"uint256[]","name":"","type":"uint256[]"}],"stateMutability":"view","type":"function"},
+  {"inputs":[{"internalType":"uint256","name":"tokenId","type":"uint256"}],"name":"tokenURI","outputs":[{"internalType":"string","name":"","type":"string"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"coloniesCount","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
+  {"inputs":[{"internalType":"uint256","name":"start","type":"uint256"},{"internalType":"uint256","name":"count","type":"uint256"}],"name":"colonyBundle","outputs":[{"internalType":"bytes32[]","name":"ids","type":"bytes32[]"},{"internalType":"uint256[]","name":"scores","type":"uint256[]"},{"internalType":"string[]","name":"labels","type":"string[]"}],"stateMutability":"view","type":"function"},
+  {"inputs":[{"internalType":"string","name":"colonyRaw","type":"string"},{"internalType":"string","name":"uri","type":"string"}],"name":"mint","outputs":[{"internalType":"uint256","name":"tokenId","type":"uint256"}],"stateMutability":"payable","type":"function"}
+];
+
+let provider, signer, contract, me;
+
+function normalize(s){ return (s||"").trim().toLowerCase(); }
+
+async function ensureProvider(){
+  if (!window.ethereum) { alert("Install MetaMask or a wallet with window.ethereum"); throw new Error("no provider"); }
+  provider = new ethers.BrowserProvider(window.ethereum);
+  return provider;
+}
+
+async function switchToBase() {
+  await ensureProvider();
+  try {
+    await provider.send("wallet_switchEthereumChain", [{ chainId: "0x" + TARGET_CHAIN_ID.toString(16) }]);
+  } catch (e) {
+    if (e.code === 4902) {
+      // add the chain
+      await provider.send("wallet_addEthereumChain", [{
+        chainId: "0x" + TARGET_CHAIN_ID.toString(16),
+        chainName: TARGET_CHAIN_ID === 8453 ? "Base" : "Base Sepolia",
+        nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
+        rpcUrls: [TARGET_CHAIN_ID === 8453 ? "https://mainnet.base.org" : "https://sepolia.base.org"],
+        blockExplorerUrls: [TARGET_CHAIN_ID === 8453 ? "https://basescan.org" : "https://sepolia.basescan.org"]
+      }]);
+    } else { throw e; }
+  }
+}
+
+async function connect() {
+  await ensureProvider();
+  await provider.send("eth_requestAccounts", []);
+  const net = await provider.getNetwork();
+  if (Number(net.chainId) !== TARGET_CHAIN_ID) {
+    // non-blocking hint; user can click Switch button
+    document.getElementById("who").innerText = `Connected to chain ${net.chainId}. Click "Switch to Base".`;
+  }
+  signer = await provider.getSigner();
+  me = await signer.getAddress();
+  contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+  const f = await contract.foundation();
+  const min = await contract.minBurnWei();
+  document.getElementById("who").innerText = `Connected: ${me}`;
+  document.getElementById("addr").innerText = CONTRACT_ADDRESS;
+  document.getElementById("found").innerText = f;
+  document.getElementById("min").innerText = min.toString();
+}
+
+async function mint() {
+  const colony = normalize(document.getElementById("colony").value);
+  const uri = document.getElementById("uri").value.trim();
+  const eth = document.getElementById("eth").value;
+  const el = document.getElementById("mintStatus");
+  if (!colony) { alert("Colony id required"); return; }
+  try {
+    const value = ethers.parseEther(eth);
+    el.innerText = "Sending tx…";
+    const tx = await contract.mint(colony, uri, { value });
+    el.innerText = `Pending: ${tx.hash}`;
+    const rcpt = await tx.wait();
+    el.innerText = `Minted! Tx: ${tx.hash}`;
+  } catch (e) {
+    console.error(e);
+    el.innerText = e?.shortMessage || e?.message || "Error";
+  }
+}
+
+async function loadLeaderboard() {
+  if (!contract) await connect();
+  const out = document.getElementById("topOut");
+  out.innerText = "Loading…";
+  try {
+    const total = await contract.coloniesCount();
+    const N = Number(total);
+    const page = 200;
+    let items = [];
+    for (let start = 0; start < N; start += page) {
+      const res = await contract.colonyBundle(start, Math.min(page, N - start));
+      const ids = res[0], scores = res[1], labels = res[2];
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        const label = (labels[i] && labels[i].length) ? labels[i] : id;
+        const wei = BigInt(scores[i]);
+        items.push({ id, label, wei });
+      }
+    }
+    if (!items.length) { out.innerText = "No colonies yet."; return; }
+    items.sort((a,b) => a.wei < b.wei ? 1 : (a.wei > b.wei ? -1 : 0));
+    const top = items.slice(0, 20);
+    out.innerHTML = '<div class="grid">' + top.map((r, idx) => {
+      const eth = ethers.formatEther(r.wei);
+      return `<div class="card">
+        <div class="pill">#${idx+1}</div>
+        <div><b>${r.label}</b></div>
+        <div class="mono muted" style="word-break:break-all">${r.id}</div>
+        <div style="margin-top:6px">Total: <b>${eth} ETH</b></div>
+      </div>`;
+    }).join("") + '</div>';
+  } catch (e) {
+    console.error(e);
+    out.innerText = e?.shortMessage || e?.message || "Error loading leaderboard.";
+  }
+}
+
+async function loadMine() {
+  if (!contract) await connect();
+  const out = document.getElementById("mine");
+  out.innerText = "Loading…";
+  try {
+    const ids = await contract.stampsOf(me);
+    if (!ids.length) { out.innerText = "No slaw stamps yet."; return; }
+    let html = '';
+    for (const id of ids) {
+      const tid = Number(id);
+      const uri = await contract.tokenURI(tid);
+      html += `<div class="card">Stamp #${tid} — <span class="mono">${uri || "(no URI)"}</span></div>`;
+    }
+    out.innerHTML = html;
+  } catch (e) {
+    console.error(e);
+    out.innerText = e?.shortMessage || e?.message || "Error.";
+  }
+}
+
+document.getElementById("connect").onclick = connect;
+document.getElementById("switch").onclick = switchToBase;
+document.getElementById("mint").onclick = mint;
+document.getElementById("loadTop").onclick = loadLeaderboard;
+document.getElementById("loadMine").onclick = loadMine;
+</script>
+</body>
+</html>
